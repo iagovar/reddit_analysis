@@ -232,6 +232,12 @@ async function streamJsonToDatabase(file) {
     }
 }
 
+/**
+ * Parses a JSON line and returns the resulting object.
+ *
+ * @param {string} line - The JSON line to parse.
+ * @return {Promise<object>} A Promise that resolves with the parsed object, or null if there was an error.
+ */
 async function parseJsonLine(line) {
     return new Promise((resolve, reject) => {
         try {
@@ -247,6 +253,13 @@ async function parseJsonLine(line) {
     })
 }
 
+/**
+ * Inserts a line into the specified database table.
+ *
+ * @param {Object} line - The line to be inserted into the table.
+ * @param {string} tableName - The name of the table to insert the line into.
+ * @return {Promise<void>} - A Promise that resolves when the line has been successfully inserted.
+ */
 async function insertLineInDB(line, tableName) {
     // Get the SQLite schema for tableName
     const thisSchema = SCHEMAS[`${tableName}`];
