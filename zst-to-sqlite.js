@@ -1,8 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 const zstd = require ('node-zstandard');
-const { Knex } = require('knex');
 const sqlite3 = require('sqlite3').verbose();
+const readline = require('readline');
 
 
 
@@ -54,7 +54,7 @@ async function main() {
 
     // Decompress such files into ./decompressed. We'll launch all decompress ops in parallel and wait until all of em are resolved.
     const decompressPromises = [];
-    for (const file of [LIST_OF_ZST_FILES_OBJS[10], LIST_OF_ZST_FILES_OBJS[11]]) {
+    for (const file of [LIST_OF_ZST_FILES_OBJS]) {
         console.log(`Decompressing file: ${file.filename}`);
 
         decompressPromises.push(decompressFile(file));
@@ -97,9 +97,9 @@ async function main() {
         await streamJsonToDatabase(file);
     }
 
-    console.log(`Job finished:\n
-    JSON: Total lines: ${ERRORS.totalJSONLines}, Total errors: ${ERRORS.totalJSONErrors}, Failure ratio: ${(ERRORS.totalJSONErrors / ERRORS.totalJSONLines).toFixed(2)}\n
-    DB: Total lines: ${ERRORS.totalDBLines}, Total errors: ${ERRORS.totalDBErrors}, Failure ratio: ${(ERRORS.totalDBErrors / ERRORS.totalDBLines).toFixed(2)}\n`);
+    console.log(`Job finished:
+    JSON: Total lines: ${ERRORS.totalJSONLines}, Total errors: ${ERRORS.totalJSONErrors}, Failure ratio: ${(ERRORS.totalJSONErrors / ERRORS.totalJSONLines).toFixed(2)}
+    DB: Total lines: ${ERRORS.totalDBLines}, Total errors: ${ERRORS.totalDBErrors}, Failure ratio: ${(ERRORS.totalDBErrors / ERRORS.totalDBLines).toFixed(2)}`);
 
 
 }
@@ -217,50 +217,37 @@ async function createTable(tableName, schema) {
  * @return {Promise} A promise that resolves when the file has been successfully streamed and inserted into the database.
  */
 async function streamJsonToDatabase(file) {
-    return new Promise((resolve, reject) => {
-        const readStream = fs.createReadStream(file.filepath, 'utf8');
-        readStream.on('data', (chunk) => {
-            const linesToInsertInDB = getListOfJsonLines(chunk);
-            for (const line of linesToInsertInDB) {
-                insertLineInDB(line, file.tableName);
-            }
-        });
-        readStream.on('end', () => {
-            console.log('End');
-            resolve();
-        });
-        readStream.on('error', (error) => {
-            console.error(`Error reading file: ${file.filepath}\n${error}\n\n`);
-            resolve();
-        })
+    const fileStream = fs.createReadStream(file.filepath, 'utf8');
+    const lineStream = readline.createInterface({
+        input: fileStream,
+        crlfDelay: Infinity
+    });
 
-    })
+    console.log('Straming JSON to DB, be patient, this may take a while...');
+    for await (const line of lineStream) {
+        const thisLine = await parseJsonLine(line);
+        if (thisLine == null) {continue;}
+        await insertLineInDB(thisLine, file.tableName);
+
+    }
 }
 
-/**
- * Parses a string of data into a list of JSON objects.
- *
- * @param {string} data - The string of data to be parsed.
- * @returns {Array} An array of JSON objects parsed from the data.
- */
-function getListOfJsonLines(data) {
-    const lines = data.split('\n');
-    const jsonLines = [];
-    for (const line of lines) {
+async function parseJsonLine(line) {
+    return new Promise((resolve, reject) => {
         try {
             const obj = JSON.parse(line);
-            jsonLines.push(obj);
             ERRORS.totalJSONLines += 1;
+            resolve(obj);
         } catch (error) {
             console.error(`Error parsing line: ${error}\n\n`);
             ERRORS.totalJSONLines += 1;
             ERRORS.totalJSONErrors += 1;
+            resolve(null);
         }
-    }
-    return jsonLines;
+    })
 }
 
-function insertLineInDB(line, tableName) {
+async function insertLineInDB(line, tableName) {
     // Get the SQLite schema for tableName
     const thisSchema = SCHEMAS[`${tableName}`];
 
@@ -289,44 +276,14 @@ function insertLineInDB(line, tableName) {
         }
     }
 
-    knex(`${tableName}`).insert(lineMatchedToSchema)
-        .then(() => {
-            ERRORS.totalDBLines += 1;
-        })
-        .catch((error) => {
-            console.error(`Error inserting line: ${line}\n${error.message}\n\n`);
-            ERRORS.totalDBErrors += 1;
-            ERRORS.totalDBLines += 1;
-        });
-
-    // Wait for knex to finish
-    
-
-
-    /*const query = generateInsertQuery(tableName, lineMatchedToSchema);
-
-    db.run(query, (error) => {
-        if (error) {
-            console.error(`Error inserting line: ${line}\n${error.message}\n\n`);
-            ERRORS.totalDBErrors += 1;
-            ERRORS.totalDBLines += 1;
-        } else {
-            ERRORS.totalDBLines += 1;
-        }
-    });
-    */
+    try {
+        await knex(`${tableName}`).insert(lineMatchedToSchema);
+        ERRORS.totalDBLines += 1;
+    } catch (error) {
+        console.error(`Error inserting line: ${line}\n${error.message}\n\n`);
+        ERRORS.totalDBErrors += 1;
+        ERRORS.totalDBLines += 1;
+    }
 }
-
-function generateInsertQuery(tableName, obj) {
-
-    // Make the columns and values strings from keys/values of the obj
-    const columns = Object.keys(obj).join(', ');
-    const values = Object.values(obj).join(', ');
-  
-    const query = `INSERT INTO ${tableName} (${columns}) VALUES (${values})`;
-    return query;
-}
-
-
 
 main();
